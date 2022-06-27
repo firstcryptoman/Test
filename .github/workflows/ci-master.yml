@@ -1,0 +1,76 @@
+name: Continuous Integration (Master)
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+jobs:
+  build-windows:
+    name: Build for Windows
+    runs-on: windows-2019
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v2
+    - name: Get Binary for libusb
+      run: |
+        Invoke-WebRequest -Uri https://github.com/libusb/libusb/releases/download/v1.0.23/libusb-1.0.23.7z -OutFile libusb.7z -UseBasicParsing
+        Start-Process -FilePath "C:\Program Files\7-Zip\7z.exe" -ArgumentList x,-olibusb,libusb.7z -NoNewWindow
+    - name: Install libusb
+      run: Copy-Item -Path "libusb\MS64\dll\libusb-1.0.dll" -Destination C:\Windows\System32\
+    - name: Install Application Dependencies
+      run: pip install -r requirements.txt
+    - name: Bundle Application
+      run: pyinstaller --distpath=bin --workpath=work dash_masternode_tool.spec
+    - name: Upload Release Artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: binaries-win32-amd64
+        path: bin\firo-masternode-tool.exe
+  build-mac:
+    name: Build for macOS
+    runs-on: macos-10.15
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v2
+    - name: Install Required System Packages
+      run: brew install libusb
+    - name: Install Application Dependencies
+      run: pip3 install --user -r requirements.txt
+    - name: Add Local Bin To Path
+      run: |
+        prefix=$(python3 -m site --user-base)
+        echo "$prefix/bin" >> $GITHUB_PATH
+    - name: Bundle Application
+      run: pyinstaller --distpath=bin --workpath=work dash_masternode_tool.spec
+    - name: Upload Release Artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: binaries-osx-amd64
+        path: bin/firo-masternode-tool.app
+  build-linux:
+    name: Build for Linux
+    runs-on: ubuntu-18.04
+    env:
+      FLATPAK_FLATHUB_REPO: https://flathub.org/repo/flathub.flatpakrepo
+      FLATPAK_LOCAL_REPO: ${{ github.workspace }}/flatpak/repo/local
+      FLATPAK_BUILD_ROOT: ${{ github.workspace }}/flatpak/build
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v2
+    - name: Install Required System Packages
+      run: sudo apt-get update && sudo apt-get install -y flatpak flatpak-builder
+    - name: Add Flatpak Repositories
+      run: flatpak remote-add --user flathub "$FLATPAK_FLATHUB_REPO"
+    - name: Install Required Flatpak Runtimes
+      run: flatpak install --user -y flathub org.freedesktop.Platform//19.08 org.freedesktop.Sdk//19.08
+    - name: Build Application
+      run: mkdir -p "$FLATPAK_LOCAL_REPO" && flatpak-builder --repo="$FLATPAK_LOCAL_REPO" "$FLATPAK_BUILD_ROOT/firo-masternode-tool" flatpak.json
+    - name: Bundle Application
+      run: flatpak build-bundle --runtime-repo="$FLATPAK_FLATHUB_REPO" "$FLATPAK_LOCAL_REPO" firo-masternode-tool.flatpak org.firo.FiroMasternodeTool
+    - name: Upload Release Artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: binaries-linux-amd64
+        path: firo-masternode-tool.flatpak

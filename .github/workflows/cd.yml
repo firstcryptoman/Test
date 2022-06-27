@@ -1,0 +1,195 @@
+name: Continuous Delivery
+on:
+  push:
+    tags:
+    - 'v*'
+jobs:
+  build-windows:
+    name: Build for Windows
+    runs-on: windows-2019
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v2
+    - name: Get Binary for libusb
+      run: |
+        Invoke-WebRequest -Uri https://github.com/libusb/libusb/releases/download/v1.0.23/libusb-1.0.23.7z -OutFile libusb.7z -UseBasicParsing
+        Start-Process -FilePath "C:\Program Files\7-Zip\7z.exe" -ArgumentList x,-olibusb,libusb.7z -NoNewWindow
+    - name: Install libusb
+      run: Copy-Item -Path "libusb\MS64\dll\libusb-1.0.dll" -Destination C:\Windows\System32\
+    - name: Install Application Dependencies
+      run: pip install -r requirements.txt
+    - name: Bundle Application
+      run: pyinstaller --distpath=bin --workpath=work dash_masternode_tool.spec
+    - name: Upload Release Artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: binaries-win32-amd64
+        path: bin\firo-masternode-tool.exe
+  build-mac:
+    name: Build for macOS
+    runs-on: macos-10.15
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v2
+    - name: Install Required System Packages
+      run: brew install libusb
+    - name: Install Application Dependencies
+      run: pip3 install --user -r requirements.txt
+    - name: Add Local Bin To Path
+      run: |
+        prefix=$(python3 -m site --user-base)
+        echo "$prefix/bin" >> $GITHUB_PATH
+    - name: Bundle Application
+      run: pyinstaller -w --distpath=bin --workpath=work dash_masternode_tool.spec
+    - name: Upload Release Artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: binaries-osx-amd64
+        path: bin/firo-masternode-tool.app
+  build-linux:
+    name: Build for Linux
+    runs-on: ubuntu-18.04
+    env:
+      FLATPAK_FLATHUB_REPO: https://flathub.org/repo/flathub.flatpakrepo
+      FLATPAK_LOCAL_REPO: ${{ github.workspace }}/flatpak/repo/local
+      FLATPAK_BUILD_ROOT: ${{ github.workspace }}/flatpak/build
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v2
+    - name: Install Required System Packages
+      run: sudo apt update && sudo apt-get install -y flatpak flatpak-builder
+    - name: Add Flatpak Repositories
+      run: flatpak remote-add --user flathub "$FLATPAK_FLATHUB_REPO"
+    - name: Install Required Flatpak Runtimes
+      run: flatpak install --user -y flathub org.freedesktop.Platform//19.08 org.freedesktop.Sdk//19.08
+    - name: Build Application
+      run: mkdir -p "$FLATPAK_LOCAL_REPO" && flatpak-builder --repo="$FLATPAK_LOCAL_REPO" "$FLATPAK_BUILD_ROOT/firo-masternode-tool" flatpak.json
+    - name: Bundle Application
+      run: flatpak build-bundle --runtime-repo="$FLATPAK_FLATHUB_REPO" "$FLATPAK_LOCAL_REPO" firo-masternode-tool.flatpak org.firo.FiroMasternodeTool
+    - name: Upload Release Artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: binaries-linux-amd64
+        path: firo-masternode-tool.flatpak
+  release:
+    name: Draft Release
+    runs-on: ubuntu-18.04
+    needs: [build-windows, build-mac, build-linux]
+    env:
+      BIN_ROOT: bin
+      ASSETS_ROOT: release
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+    - name: Get Windows Binaries
+      uses: actions/download-artifact@v2
+      with:
+        name: binaries-win32-amd64
+        path: ${{ env.BIN_ROOT }}/win32/amd64
+    - name: Get macOS Binaries
+      uses: actions/download-artifact@v2
+      with:
+        name: binaries-osx-amd64
+        path: ${{ env.BIN_ROOT }}/osx/amd64
+    - name: Get Linux Binaries
+      uses: actions/download-artifact@v2
+      with:
+        name: binaries-linux-amd64
+        path: ${{ env.BIN_ROOT }}/linux/amd64
+    - name: Generate Release Information
+      shell: python
+      run: |
+        import os
+        import re
+
+        ref = os.environ['GITHUB_REF']
+        tag = re.match(r'^refs/tags/(.+)$', ref).group(1)
+        version = re.match(r'^v(.+)$', tag).group(1)
+        pre_release = '-' in version
+
+        print('Tag Reference: {0}'.format(ref))
+        print('Tag Name     : {0}'.format(tag))
+        print('Version      : {0}'.format(version))
+        print('Pre-release  : {0}'.format(pre_release))
+
+        print('::set-output name=version::{0}'.format(version))
+        print('::set-output name=pre-release::{0}'.format(str(pre_release).lower()))
+      id: release-info
+    - name: Create Release Assets
+      run: |
+        version="${{ steps.release-info.outputs.version }}"
+        win32="firo-masternode-tool-${version}-win32-amd64.zip"
+        osx="firo-masternode-tool-${version}-osx-amd64.zip"
+        linux="firo-masternode-tool-${version}-linux-amd64.tar.gz"
+
+        echo "==> Prepare a directory for assets"
+        mkdir -v "$ASSETS_ROOT"
+
+        echo "==> Prepare Win32 binaries"
+        contents="Firo Masternode Toool"
+        mv -v "$BIN_ROOT/win32/amd64" "$ASSETS_ROOT/$contents"
+
+        echo "==> Zip Win32 contents"
+        pushd "$ASSETS_ROOT" > /dev/null
+        zip -r -9 -v "$win32" "$contents"
+        popd > /dev/null
+
+        echo "==> Prepare macOS bundle"
+        contents="Firo Masternode Tool.app"
+        mv -v "$BIN_ROOT/osx/amd64" "$ASSETS_ROOT/$contents"
+        chmod a+x "$ASSETS_ROOT/$contents/Contents/MacOS/firo-masternode-tool"
+
+        echo "==> Zip macOS bundle"
+        pushd "$ASSETS_ROOT" > /dev/null
+        zip -r -9 -v "$osx" "$contents"
+        popd > /dev/null
+
+        echo "==> Prepare Linux binaries"
+        contents="firo-masternode-tool"
+        mv -v "$BIN_ROOT/linux/amd64" "$ASSETS_ROOT/$contents"
+
+        echo "==> Tarball Linux contents"
+        pushd "$ASSETS_ROOT" > /dev/null
+        tar -cvzf "$linux" "$contents"
+        popd > /dev/null
+
+        echo "::set-output name=win32-name::$win32"
+        echo "::set-output name=win32-path::$ASSETS_ROOT/$win32"
+        echo "::set-output name=win32-type::application/zip"
+
+        echo "::set-output name=osx-name::$osx"
+        echo "::set-output name=osx-path::$ASSETS_ROOT/$osx"
+        echo "::set-output name=osx-type::application/zip"
+
+        echo "::set-output name=linux-name::$linux"
+        echo "::set-output name=linux-path::$ASSETS_ROOT/$linux"
+        echo "::set-output name=linux-type::application/gzip"
+      id: release-assets
+    - name: Draft Release
+      uses: actions/create-release@v1
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: ${{ steps.release-info.outputs.version }}
+        draft: true
+        prerelease: ${{ steps.release-info.outputs.pre-release }}
+      id: draft-release
+    - name: Upload Windows Assets
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ steps.draft-release.outputs.upload_url }}
+        asset_name: ${{ steps.release-assets.outputs.win32-name }}
+        asset_path: ${{ steps.release-assets.outputs.win32-path }}
+        asset_content_type: ${{ steps.release-assets.outputs.win32-type }}
+    - name: Upload macOS Assets
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ steps.draft-release.outputs.upload_url }}
+        asset_name: ${{ steps.release-assets.outputs.osx-name }}
+        asset_path: ${{ steps.release-assets.outputs.osx-path }}
+        asset_content_type: ${{ steps.release-assets.outputs.osx-type }}
+    - name: Upload Linux Assets
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ steps.draft-release.outputs.upload_url }}
+        asset_name: ${{ steps.release-assets.outputs.linux-name }}
+        asset_path: ${{ steps.release-assets.outputs.linux-path }}
+        asset_content_type: ${{ steps.release-assets.outputs.linux-type }}
