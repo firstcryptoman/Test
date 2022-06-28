@@ -79,11 +79,11 @@ jobs:
     - name: Add Local Bin To Path
       run: |
         prefix=$(python3 -m site --user-base)
-        echo "::add-path::$prefix/bin"
+        echo "$prefix/bin" >> $GITHUB_PATH
     - name: Bundle Application
       run: pyinstaller --distpath=bin --workpath=work dash_masternode_tool.spec
     - name: Upload Release Artifact
       uses: actions/upload-artifact@v2
       with:
         name: binaries-linux-amd64
-        path: firo-masternode-tool
+        path: bin/firo-masternode-tool
