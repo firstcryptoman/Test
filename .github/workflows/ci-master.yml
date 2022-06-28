@@ -69,7 +69,7 @@ jobs:
     #   run: mkdir -p "$FLATPAK_LOCAL_REPO" && flatpak-builder --repo="$FLATPAK_LOCAL_REPO" "$FLATPAK_BUILD_ROOT/firo-masternode-tool" flatpak.json
     # - name: Bundle Application
     #   run: flatpak build-bundle --runtime-repo="$FLATPAK_FLATHUB_REPO" "$FLATPAK_LOCAL_REPO" firo-masternode-tool.flatpak org.firo.FiroMasternodeTool
-      run: sudo apt-get install -y libudev-dev libusb-1.0-0-dev libpython3-all-dev python3.6-dev python3-pip
+      run: sudo apt-get install -y libudev-dev libusb-1.0-0-dev python3-setuptools python3-wheel
     - name: pip upgrade
       run: sudo pip3 install --upgrade pip
     - name: setuptools upgrade
